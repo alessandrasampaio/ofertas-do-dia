@@ -2,57 +2,77 @@ import os
 import json
 import requests
 from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-# --- Configurações (vêm dos Secrets do GitHub) ---
+# --- Configurações ---
 GREEN_API_INSTANCE_ID = os.environ.get("GREEN_API_INSTANCE_ID")
 GREEN_API_TOKEN = os.environ.get("GREEN_API_TOKEN")
 WHATSAPP_PHONE = os.environ.get("WHATSAPP_PHONE")
+MERCADO_LIVRE_AFFILIATE_ID = os.environ.get("MERCADO_LIVRE_AFFILIATE_ID")
+
+def adicionar_id_afiliado(url_produto):
+    if not MERCADO_LIVRE_AFFILIATE_ID:
+        return url_produto
+    parsed_url = urlparse(url_produto)
+    query_params = parse_qs(parsed_url.query)
+    query_params['matt_tool'] = [MERCADO_LIVRE_AFFILIATE_ID]
+    new_query = urlencode(query_params, doseq=True)
+    return urlunparse(parsed_url._replace(query=new_query))
 
 def buscar_mercadolivre():
-    """Busca ofertas no Mercado Livre usando Playwright (disfarçado de humano)."""
     ofertas = []
-    print("Iniciando navegador para buscar no Mercado Livre...")
+    print("Iniciando navegador MODO STEALTH...")
     
     with sync_playwright() as p:
-        # Abre o navegador
         browser = p.chromium.launch(headless=True)
-        
-        # DISFARCE: Criamos um contexto fingindo ser um Google Chrome real no Windows
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        context = browser.new_context(user_agent=user_agent, viewport={"width": 1920, "height": 1080})
+        # Configurando um contexto que parece um navegador real
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="pt-BR"
+        )
         page = context.new_page()
         
+        # Aplica o disfarce Stealth
+        stealth_sync(page)
+        
         try:
-            # Vai para a página de ofertas
+            # Tenta acessar a página de busca de ofertas (às vezes é mais fácil que a home)
             print("Acessando o site...")
-            page.goto("https://www.mercadolivre.com.br/ofertas", timeout=60000)
+            page.goto("https://lista.mercadolivre.com.br/ofertas", timeout=60000)
             
-            # Espera um pouco para a página carregar
+            # Espera um tempo maior para parecer humano e dar tempo de carregar
+            page.wait_for_timeout(5000)
+            
+            # Verifica se fomos bloqueados
+            if "Just a moment" in page.title() or "Acesso negado" in page.title():
+                print("Bloqueado pelo Cloudflare do Mercado Livre.")
+                return []
+
+            print(f"Página carregada: {page.title()}")
+            
+            # Rola a página
+            page.evaluate("window.scrollBy(0, 1500)")
             page.wait_for_timeout(3000)
             
-            # Rola a página para baixo para forçar o carregamento das imagens e produtos
-            print("Rolando a página...")
-            page.evaluate("window.scrollBy(0, 1000)")
-            page.wait_for_timeout(2000)
-            
-            # O Mercado Livre usa a classe 'poly-card' ou 'promotion-item' dependendo do layout
-            # Vamos buscar por ambos
-            cards = page.locator('.poly-card, .promotion-item').all()
+            # Novos seletores do Mercado Livre (baseados no layout atual)
+            cards = page.locator('.poly-card, .ui-search-result').all()
             print(f"Encontrados {len(cards)} cards na tela.")
             
-            for card in cards[:15]:  # Pega os 15 primeiros
+            for card in cards[:15]:
                 try:
-                    # Tenta pegar os elementos
-                    titulo_elem = card.locator('.poly-component__title, .promotion-item__title').first
+                    titulo_elem = card.locator('.poly-component__title, .ui-search-item__title').first
                     preco_elem = card.locator('.andes-money-amount__fraction').first
                     link_elem = card.locator('a').first
                     
                     if titulo_elem.count() > 0 and preco_elem.count() > 0:
                         titulo = titulo_elem.inner_text().strip()
                         preco_texto = preco_elem.inner_text().strip().replace(".", "")
-                        link = link_elem.get_attribute("href")
+                        link_original = link_elem.get_attribute("href")
                         
-                        # Tenta pegar a imagem
+                        link_com_afiliado = adicionar_id_afiliado(link_original)
+                        
                         img_elem = card.locator('img').first
                         img = ""
                         if img_elem.count() > 0:
@@ -62,10 +82,10 @@ def buscar_mercadolivre():
                             "plataforma": "Mercado Livre",
                             "titulo": titulo,
                             "preco": float(preco_texto),
-                            "link": link,
+                            "link": link_com_afiliado,
                             "imagem": img
                         })
-                except Exception as e:
+                except Exception:
                     continue
                     
         except Exception as e:
@@ -77,14 +97,12 @@ def buscar_mercadolivre():
     return ofertas
 
 def enviar_whatsapp(ofertas):
-    """Envia um resumo das ofertas para o WhatsApp via GREEN-API."""
     if not GREEN_API_INSTANCE_ID or not GREEN_API_TOKEN or not WHATSAPP_PHONE:
-        print("GREEN-API não configurada. Pulando envio.")
+        print("GREEN-API não configurada.")
         return
     
-    # Se não achar nada, envia um aviso
-    if len(ofertas) <= 1 and ofertas[0]['plataforma'] == 'Aviso':
-        mensagem = "⚠️ O robô não conseguiu encontrar ofertas hoje. O Mercado Livre pode ter bloqueado o acesso."
+    if not ofertas or (len(ofertas) == 1 and ofertas[0]['plataforma'] == 'Aviso'):
+        mensagem = "⚠️ O Mercado Livre bloqueou o acesso do robô hoje. (Cloudflare)"
     else:
         top_ofertas = sorted(ofertas, key=lambda x: x["preco"])[:5]
         mensagem = "🛒 *Melhores Ofertas do Mercado Livre*\n\n"
@@ -98,22 +116,19 @@ def enviar_whatsapp(ofertas):
     payload = {"chatId": chat_id, "message": mensagem}
     
     try:
-        r = requests.post(url, json=payload, timeout=10)
-        if r.status_code == 200:
-            print("WhatsApp enviado com sucesso!")
+        requests.post(url, json=payload, timeout=10)
+        print("WhatsApp enviado!")
     except Exception as e:
-        print(f"Erro de conexão GREEN-API: {e}")
+        print(f"Erro WhatsApp: {e}")
 
 if __name__ == "__main__":
-    print("Iniciando coleta de ofertas...")
-    
+    print("Iniciando coleta...")
     todas_ofertas = buscar_mercadolivre()
     
     if not todas_ofertas:
-        print("Nenhuma oferta encontrada hoje.")
         todas_ofertas = [{
             "plataforma": "Aviso",
-            "titulo": "O Mercado Livre bloqueou o robô hoje. Aguarde a próxima execução.",
+            "titulo": "O Mercado Livre bloqueou o acesso (Cloudflare).",
             "preco": 0.0,
             "link": "#",
             "imagem": ""
@@ -123,4 +138,4 @@ if __name__ == "__main__":
         json.dump(todas_ofertas, f, ensure_ascii=False, indent=2)
     
     enviar_whatsapp(todas_ofertas)
-    print(f"Coleta finalizada. {len(todas_ofertas)} ofertas salvas.")
+    print(f"Finalizado. {len(todas_ofertas)} itens.")
