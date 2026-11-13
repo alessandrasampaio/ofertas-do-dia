@@ -1,7 +1,7 @@
 [
   {
     "plataforma": "Aviso",
-    "titulo": "A API não retornou produtos hoje.",
+    "titulo": "O Mercado Livre bloqueou o acesso. Aguardando nova tentativa.",
     "preco": 0.0,
     "link": "#",
     "imagem": ""
