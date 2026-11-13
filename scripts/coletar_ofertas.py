@@ -1,7 +1,10 @@
 import os
 import json
 import requests
+import feedparser
+import re
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from bs4 import BeautifulSoup
 
 # --- Configurações ---
 GREEN_API_INSTANCE_ID = os.environ.get("GREEN_API_INSTANCE_ID")
@@ -10,58 +13,78 @@ WHATSAPP_PHONE = os.environ.get("WHATSAPP_PHONE")
 MERCADO_LIVRE_AFFILIATE_ID = os.environ.get("MERCADO_LIVRE_AFFILIATE_ID")
 
 def adicionar_id_afiliado(url_produto):
-    if not MERCADO_LIVRE_AFFILIATE_ID:
+    """Adiciona o seu ID de afiliado (matt_tool) no link."""
+    if not MERCADO_LIVRE_AFFILIATE_ID or "mercadolivre" not in url_produto:
         return url_produto
+    
+    # Limpa a URL para evitar links duplicados quebrados
     parsed_url = urlparse(url_produto)
     query_params = parse_qs(parsed_url.query)
     query_params['matt_tool'] = [MERCADO_LIVRE_AFFILIATE_ID]
     new_query = urlencode(query_params, doseq=True)
     return urlunparse(parsed_url._replace(query=new_query))
 
-def buscar_mercadolivre():
+def buscar_ofertas_promobit():
     ofertas = []
-    print("Buscando ofertas na API do Mercado Livre...")
+    print("Buscando ofertas no agregador Promobit (RSS)...")
     
-    url = "https://api.mercadolibre.com/sites/MLB/search?q=promocao&limit=20"
+    # Lendo o Feed RSS do Promobit
+    url_rss = "https://www.promobit.com.br/rss/"
+    feed = feedparser.parse(url_rss)
     
-    # DISFARCE: Fingindo ser o Chrome do Windows
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
-    }
+    print(f"Encontradas {len(feed.entries)} ofertas no feed.")
     
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
+    for entry in feed.entries:
+        titulo = entry.title
+        descricao = entry.description
         
-        print(f"Status da resposta do Mercado Livre: {response.status_code}")
+        # Tenta achar um link do Mercado Livre dentro da descrição da oferta
+        ml_link = None
+        soup = BeautifulSoup(descricao, "html.parser")
+        links = soup.find_all("a", href=True)
         
-        if response.status_code == 200:
-            data = response.json()
-            resultados = data.get("results", [])
-            print(f"API retornou {len(resultados)} produtos com sucesso.")
-            
-            for item in resultados:
-                titulo = item.get("title", "Produto sem título")
-                preco = float(item.get("price", 0))
-                link_original = item.get("permalink", "")
-                imagem = item.get("thumbnail", "").replace("http://", "https://")
+        for a in links:
+            href = a['href']
+            if "mercadolivre.com.br" in href or "mercadolivre.com" in href:
+                ml_link = href
+                break
                 
-                if link_original and preco > 0:
-                    link_com_afiliado = adicionar_id_afiliado(link_original)
-                    ofertas.append({
-                        "plataforma": "Mercado Livre",
-                        "titulo": titulo,
-                        "preco": preco,
-                        "link": link_com_afiliado,
-                        "imagem": imagem
-                    })
-        else:
-            print(f"Bloqueio detectado! Resposta do site: {response.text[:200]}...")
+        # Se a oferta tiver um link do Mercado Livre, nós a processamos
+        if ml_link:
+            # Tenta extrair o preço do título (ex: R$ 1.999,00)
+            preco = 0.0
+            match_preco = re.search(r'R\$\s*([\d\.]+,\d{2})', titulo)
+            if match_preco:
+                preco_str = match_preco.group(1).replace('.', '').replace(',', '.')
+                try:
+                    preco = float(preco_str)
+                except:
+                    pass
             
-    except Exception as e:
-        print(f"Erro ao acessar a API: {e}")
-        
+            link_com_afiliado = adicionar_id_afiliado(ml_link)
+            
+            # Tenta pegar a imagem se existir no feed
+            imagem = ""
+            if 'media_content' in entry:
+                imagem = entry.media_content[0]['url']
+            elif 'links' in entry:
+                for link in entry.links:
+                    if link.get('type', '').startswith('image'):
+                        imagem = link.get('href')
+                        break
+
+            ofertas.append({
+                "plataforma": "Mercado Livre",
+                "titulo": titulo,
+                "preco": preco,
+                "link": link_com_afiliado,
+                "imagem": imagem
+            })
+            
+            # Se já achamos 15 ofertas boas, paramos para não sobrecarregar
+            if len(ofertas) >= 15:
+                break
+
     return ofertas
 
 def enviar_whatsapp(ofertas):
@@ -70,13 +93,15 @@ def enviar_whatsapp(ofertas):
         return
     
     if not ofertas:
-        mensagem = "⚠️ O Mercado Livre bloqueou o acesso do robô. Vou tentar outra estratégia na próxima."
+        mensagem = "⚠️ Não encontramos ofertas do Mercado Livre no agregador hoje."
     else:
-        top_ofertas = sorted(ofertas, key=lambda x: x["preco"])[:5]
-        mensagem = "🛒 *Melhores Ofertas do Mercado Livre*\n\n"
+        # Ordena pelo preço (se tiver) ou pega as primeiras
+        top_ofertas = ofertas[:5]
+        mensagem = "🛒 *Melhores Ofertas do Mercado Livre (via Promobit)*\n\n"
         for of in top_ofertas:
-            mensagem += f"*{of['titulo'][:50]}...*\n"
-            mensagem += f"💰 R$ {of['preco']:.2f}\n"
+            mensagem += f"*{of['titulo'][:60]}...*\n"
+            if of['preco'] > 0:
+                mensagem += f"💰 R$ {of['preco']:.2f}\n"
             mensagem += f"🔗 {of['link']}\n\n"
     
     url = f"https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}"
@@ -86,18 +111,18 @@ def enviar_whatsapp(ofertas):
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
-            print("WhatsApp enviado!")
+            print("WhatsApp enviado com sucesso!")
     except Exception as e:
         print(f"Erro de conexão WhatsApp: {e}")
 
 if __name__ == "__main__":
-    print("Iniciando coleta...")
-    todas_ofertas = buscar_mercadolivre()
+    print("Iniciando coleta via Promobit...")
+    todas_ofertas = buscar_ofertas_promobit()
     
     if not todas_ofertas:
         todas_ofertas = [{
             "plataforma": "Aviso",
-            "titulo": "O Mercado Livre bloqueou o acesso. Aguardando nova tentativa.",
+            "titulo": "Nenhuma oferta do Mercado Livre encontrada no Promobit hoje.",
             "preco": 0.0,
             "link": "#",
             "imagem": ""
@@ -107,4 +132,4 @@ if __name__ == "__main__":
         json.dump(todas_ofertas, f, ensure_ascii=False, indent=2)
     
     enviar_whatsapp(todas_ofertas)
-    print(f"Coleta finalizada. {len(todas_ofertas)} itens.")
+    print(f"Coleta finalizada. {len(todas_ofertas)} ofertas salvas.")
