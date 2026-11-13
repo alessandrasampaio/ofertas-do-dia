@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Melhores Ofertas - Diário</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #f4f6f8; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { color: #003629; margin: 0; }
+        .data-atualizacao { font-size: 14px; color: #666; }
+        .filtro { width: 100%; padding: 14px; margin-bottom: 25px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; box-sizing: border-box; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .filtro:focus { outline: none; border-color: #00A887; box-shadow: 0 0 0 3px rgba(0, 168, 135, 0.2); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; }
+        .card { background: #fff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); overflow: hidden; display: flex; flex-direction: column; transition: transform 0.2s; }
+        .card:hover { transform: translateY(-5px); }
+        .card img { width: 100%; height: 200px; object-fit: contain; background: #f9f9f9; padding: 15px; box-sizing: border-box; }
+        .card-content { padding: 15px; flex-grow: 1; display: flex; flex-direction: column; }
+        .plataforma { font-size: 11px; font-weight: 800; color: #00A887; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
+        .titulo { font-size: 15px; font-weight: 600; margin-bottom: 12px; flex-grow: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .preco { font-size: 22px; font-weight: 800; color: #1A4491; margin-bottom: 15px; }
+        .acoes { display: flex; gap: 10px; }
+        .btn { flex: 1; padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; text-align: center; text-decoration: none; font-size: 13px; transition: 0.2s; }
+        .btn-copiar { background: #e2e8f0; color: #334155; }
+        .btn-copiar:hover { background: #cbd5e1; }
+        .btn-whats { background: #25D366; color: #fff; display: flex; align-items: center; justify-content: center; }
+        .btn-whats:hover { background: #1eb957; }
+        .loading { text-align: center; font-size: 18px; color: #666; margin-top: 50px; }
+        .erro { text-align: center; font-size: 16px; color: #d32f2f; margin-top: 50px; background: #ffebee; padding: 20px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🛒 Melhores Ofertas</h1>
+            <div class="data-atualizacao" id="dataAtualizacao"></div>
+        </header>
+        
+        <input type="text" id="filtro" class="filtro" placeholder="Filtrar por produto (ex: fone, celular, air fryer)...">
+        
+        <div id="grid" class="grid">
+            <div class="loading">Carregando ofertas... Aguarde.</div>
+        </div>
+    </div>
+
+    <script>
+        async function carregarOfertas() {
+            try {
+                // O '?t=...' evita que o navegador guarde uma versão antiga do JSON em cache
+                const resp = await fetch('ofertas.json?t=' + new Date().getTime());
+                if (!resp.ok) throw new Error("Arquivo de ofertas não encontrado.");
+                
+                const ofertas = await resp.json();
+                renderizar(ofertas);
+                document.getElementById('dataAtualizacao').innerText = "Atualizado em: " + new Date().toLocaleDateString('pt-BR') + " às " + new Date().toLocaleTimeString('pt-BR');
+            } catch (e) {
+                document.getElementById('grid').innerHTML = '<div class="erro">Nenhuma oferta encontrada ainda. O robô precisa rodar no GitHub Actions para gerar os dados.</div>';
+            }
+        }
+
+        function renderizar(ofertas) {
+            const grid = document.getElementById('grid');
+            if (ofertas.length === 0) {
+                grid.innerHTML = '<div class="erro">A lista está vazia.</div>';
+                return;
+            }
+
+            grid.innerHTML = ofertas.map(o => {
+                // Se a imagem falhar, coloca uma imagem padrão cinza
+                const imgSrc = o.imagem || 'https://via.placeholder.com/200?text=Sem+Foto';
+                
+                // Prepara o texto para o WhatsApp
+                const textoWhats = encodeURIComponent(`Olha essa oferta que achei: *${o.titulo}* por R$ ${o.preco.toFixed(2)}!\nLink: ${o.link}`);
+                
+                return `
+                <div class="card">
+                    <img src="${imgSrc}" alt="${o.titulo}" onerror="this.src='https://via.placeholder.com/200?text=Erro+na+Foto'">
+                    <div class="card-content">
+                        <div class="plataforma">${o.plataforma}</div>
+                        <div class="titulo" title="${o.titulo}">${o.titulo}</div>
+                        <div class="preco">R$ ${o.preco.toFixed(2).replace('.', ',')}</div>
+                        <div class="acoes">
+                            <button class="btn btn-copiar" onclick="copiarLink('${o.link}')">Copiar Link</button>
+                            <a href="https://wa.me/?text=${textoWhats}" target="_blank" class="btn btn-whats">Enviar</a>
+                        </div>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function copiarLink(link) {
+            navigator.clipboard.writeText(link).then(() => {
+                alert('✅ Link copiado para a área de transferência!');
+            }).catch(err => {
+                alert('Erro ao copiar o link.');
+            });
+        }
+
+        // Lógica do filtro em tempo real
+        document.getElementById('filtro').addEventListener('input', (e) => {
+            const termo = e.target.value.toLowerCase();
+            const cards = document.querySelectorAll('.card');
+            
+            cards.forEach(card => {
+                const titulo = card.querySelector('.titulo').innerText.toLowerCase();
+                const plataforma = card.querySelector('.plataforma').innerText.toLowerCase();
+                
+                if (titulo.includes(termo) || plataforma.includes(termo)) {
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        });
+
+        // Inicia a busca assim que a página abre
+        carregarOfertas();
+    </script>
+</body>
+</html>
