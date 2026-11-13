@@ -2,11 +2,9 @@ name: Coletar Ofertas Diárias
 
 on:
   schedule:
-    # O cron roda no fuso horário UTC. '0 9 * * *' significa 09:00 UTC, que é 06:00 no horário de Brasília.
-    - cron: '0 9 * * *'
-  workflow_dispatch: # Isso permite que você clique em um botão para rodar manualmente e testar
+    - cron: '0 9 * * *' # Roda às 06:00 no horário de Brasília
+  workflow_dispatch: 
 
-# Permissão necessária para que o robô possa salvar o arquivo JSON atualizado no repositório
 permissions:
   contents: write
 
@@ -22,22 +20,23 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 3. Instalar as dependências (requests, beautifulsoup4, etc)
+      - name: 3. Instalar as dependências
         run: pip install -r requirements.txt
 
-      - name: 4. Executar o script de coleta
-        # Aqui nós passamos as chaves secretas de forma segura para o script
+      - name: 4. Instalar o navegador do Playwright (Chromium)
+        run: playwright install chromium
+
+      - name: 5. Executar o script de coleta
         env:
-          SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
-          SHOPEE_SECRET: ${{ secrets.SHOPEE_SECRET }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN: ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
         run: python scripts/coletar_ofertas.py
 
-      - name: 5. Salvar o arquivo de ofertas atualizado no repositório
+      - name: 6. Salvar o arquivo de ofertas atualizado
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add ofertas.json
-          git commit -m "🤖 Atualização automática das ofertas" || echo "Nenhuma alteração nas ofertas hoje"
+          git commit -m "🤖 Atualização automática das ofertas (Mercado Livre)" || echo "Nenhuma alteração nas ofertas hoje"
           git push
