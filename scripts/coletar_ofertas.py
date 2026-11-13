@@ -9,40 +9,53 @@ GREEN_API_TOKEN = os.environ.get("GREEN_API_TOKEN")
 WHATSAPP_PHONE = os.environ.get("WHATSAPP_PHONE")
 
 def buscar_mercadolivre():
-    """Busca ofertas no Mercado Livre usando Playwright (navegador real)."""
+    """Busca ofertas no Mercado Livre usando Playwright (disfarçado de humano)."""
     ofertas = []
     print("Iniciando navegador para buscar no Mercado Livre...")
     
     with sync_playwright() as p:
-        # Abre o navegador Chromium em modo headless (invisível)
+        # Abre o navegador
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        
+        # DISFARCE: Criamos um contexto fingindo ser um Google Chrome real no Windows
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        context = browser.new_context(user_agent=user_agent, viewport={"width": 1920, "height": 1080})
+        page = context.new_page()
         
         try:
-            # Vai para a página de ofertas do Mercado Livre
+            # Vai para a página de ofertas
+            print("Acessando o site...")
             page.goto("https://www.mercadolivre.com.br/ofertas", timeout=60000)
             
-            # Espera os cards de produtos carregarem na tela
-            page.wait_for_selector(".promotion-item", timeout=15000)
+            # Espera um pouco para a página carregar
+            page.wait_for_timeout(3000)
             
-            # Pega todos os cards de promoção visíveis
-            cards = page.query_selector_all(".promotion-item")
+            # Rola a página para baixo para forçar o carregamento das imagens e produtos
+            print("Rolando a página...")
+            page.evaluate("window.scrollBy(0, 1000)")
+            page.wait_for_timeout(2000)
+            
+            # O Mercado Livre usa a classe 'poly-card' ou 'promotion-item' dependendo do layout
+            # Vamos buscar por ambos
+            cards = page.locator('.poly-card, .promotion-item').all()
+            print(f"Encontrados {len(cards)} cards na tela.")
             
             for card in cards[:15]:  # Pega os 15 primeiros
                 try:
-                    titulo_elem = card.query_selector(".promotion-item__title")
-                    preco_elem = card.query_selector(".andes-money-amount__fraction")
-                    link_elem = card.query_selector("a")
-                    img_elem = card.query_selector("img")
+                    # Tenta pegar os elementos
+                    titulo_elem = card.locator('.poly-component__title, .promotion-item__title').first
+                    preco_elem = card.locator('.andes-money-amount__fraction').first
+                    link_elem = card.locator('a').first
                     
-                    if titulo_elem and preco_elem and link_elem:
+                    if titulo_elem.count() > 0 and preco_elem.count() > 0:
                         titulo = titulo_elem.inner_text().strip()
                         preco_texto = preco_elem.inner_text().strip().replace(".", "")
                         link = link_elem.get_attribute("href")
                         
-                        # Algumas imagens usam data-src ou src dependendo do carregamento
+                        # Tenta pegar a imagem
+                        img_elem = card.locator('img').first
                         img = ""
-                        if img_elem:
+                        if img_elem.count() > 0:
                             img = img_elem.get_attribute("src") or img_elem.get_attribute("data-src") or ""
                         
                         ofertas.append({
@@ -53,7 +66,6 @@ def buscar_mercadolivre():
                             "imagem": img
                         })
                 except Exception as e:
-                    print(f"Erro ao ler um card específico: {e}")
                     continue
                     
         except Exception as e:
@@ -61,7 +73,7 @@ def buscar_mercadolivre():
         finally:
             browser.close()
             
-    print(f"Encontradas {len(ofertas)} ofertas no Mercado Livre.")
+    print(f"Total de ofertas capturadas: {len(ofertas)}")
     return ofertas
 
 def enviar_whatsapp(ofertas):
@@ -70,17 +82,16 @@ def enviar_whatsapp(ofertas):
         print("GREEN-API não configurada. Pulando envio.")
         return
     
-    if not ofertas:
-        print("Nenhuma oferta para enviar hoje.")
-        return
-
-    top_ofertas = sorted(ofertas, key=lambda x: x["preco"])[:5]
-    
-    mensagem = "🛒 *Melhores Ofertas do Mercado Livre*\n\n"
-    for of in top_ofertas:
-        mensagem += f"*{of['titulo'][:60]}...*\n"
-        mensagem += f"💰 R$ {of['preco']:.2f}\n"
-        mensagem += f"🔗 {of['link']}\n\n"
+    # Se não achar nada, envia um aviso
+    if len(ofertas) <= 1 and ofertas[0]['plataforma'] == 'Aviso':
+        mensagem = "⚠️ O robô não conseguiu encontrar ofertas hoje. O Mercado Livre pode ter bloqueado o acesso."
+    else:
+        top_ofertas = sorted(ofertas, key=lambda x: x["preco"])[:5]
+        mensagem = "🛒 *Melhores Ofertas do Mercado Livre*\n\n"
+        for of in top_ofertas:
+            mensagem += f"*{of['titulo'][:50]}...*\n"
+            mensagem += f"💰 R$ {of['preco']:.2f}\n"
+            mensagem += f"🔗 {of['link']}\n\n"
     
     url = f"https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}"
     chat_id = f"{WHATSAPP_PHONE}@c.us"
@@ -90,8 +101,6 @@ def enviar_whatsapp(ofertas):
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
             print("WhatsApp enviado com sucesso!")
-        else:
-            print(f"Erro GREEN-API: {r.text}")
     except Exception as e:
         print(f"Erro de conexão GREEN-API: {e}")
 
@@ -102,10 +111,9 @@ if __name__ == "__main__":
     
     if not todas_ofertas:
         print("Nenhuma oferta encontrada hoje.")
-        # Fallback para o site não quebrar
         todas_ofertas = [{
             "plataforma": "Aviso",
-            "titulo": "Nenhuma oferta encontrada hoje. Aguarde a próxima execução.",
+            "titulo": "O Mercado Livre bloqueou o robô hoje. Aguarde a próxima execução.",
             "preco": 0.0,
             "link": "#",
             "imagem": ""
