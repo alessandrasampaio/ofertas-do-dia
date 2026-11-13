@@ -21,7 +21,9 @@ jobs:
           python-version: '3.10'
 
       - name: 3. Instalar as dependências
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
 
       - name: 4. Instalar o navegador do Playwright (Chromium)
         run: playwright install chromium
