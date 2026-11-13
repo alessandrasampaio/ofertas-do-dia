@@ -21,24 +21,20 @@ jobs:
           python-version: '3.10'
 
       - name: 3. Instalar as dependências
-        run: |
-          pip install -r requirements.txt
-          playwright install chromium
+        run: pip install -r requirements.txt
 
-      - name: 4. Instalar o navegador do Playwright (Chromium)
-        run: playwright install chromium
-
-      - name: 5. Executar o script de coleta
+      - name: 4. Executar o script de coleta
         env:
           GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
           GREEN_API_TOKEN: ${{ secrets.GREEN_API_TOKEN }}
           WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
+          MERCADO_LIVRE_AFFILIATE_ID: ${{ secrets.MERCADO_LIVRE_AFFILIATE_ID }}
         run: python scripts/coletar_ofertas.py
 
-      - name: 6. Salvar o arquivo de ofertas atualizado
+      - name: 5. Salvar o arquivo de ofertas atualizado
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add ofertas.json
-          git commit -m "🤖 Atualização automática das ofertas (Mercado Livre)" || echo "Nenhuma alteração nas ofertas hoje"
+          git commit -m "🤖 Atualização automática das ofertas (API ML)" || echo "Nenhuma alteração nas ofertas hoje"
           git push
