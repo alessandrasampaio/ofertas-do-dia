@@ -1,7 +1,7 @@
 import os
 import json
-import requests # Para o WhatsApp (Green API)
-from curl_cffi import requests as curl_requests # A arma secreta contra o bloqueio
+import requests
+import re
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -23,57 +23,78 @@ def adicionar_id_afiliado(url_produto):
     except:
         return url_produto
 
-def buscar_mercadolivre():
+def buscar_ofertas_telegram():
     ofertas = []
-    print("Acessando o Mercado Livre com disfarce Chrome (curl_cffi)...")
+    print("Buscando ofertas no canal do Telegram (Promobit)...")
     
-    url = "https://www.mercadolivre.com.br/ofertas"
+    # Acessando a versão web do canal oficial do Promobit no Telegram
+    url = "https://t.me/s/promobit"
     
     try:
-        # AQUI ESTÁ A MÁGICA: impersonate="chrome110" engana o Cloudflare
-        response = curl_requests.get(url, impersonate="chrome110", timeout=20)
+        response = requests.get(url, timeout=15)
+        soup = BeautifulSoup(response.text, "html.parser")
         
-        print(f"Status da resposta: {response.status_code}")
+        # Pega todas as mensagens do canal
+        mensagens = soup.select(".tgme_widget_message")
+        print(f"Encontradas {len(mensagens)} mensagens recentes no canal.")
         
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
+        for msg in mensagens:
+            texto_elem = msg.select_one(".tgme_widget_message_text")
+            if not texto_elem:
+                continue
+                
+            texto = texto_elem.get_text(separator="\n").strip()
             
-            # Busca os cards de produto
-            cards = soup.select(".poly-card, .promotion-item")
-            print(f"Encontrados {len(cards)} cards na página.")
-            
-            for card in cards[:15]:
-                try:
-                    titulo_elem = card.select_one(".poly-component__title, .promotion-item__title")
-                    preco_elem = card.select_one(".andes-money-amount__fraction")
-                    link_elem = card.select_one("a")
+            # Procura links do Mercado Livre dentro da mensagem
+            links = texto_elem.find_all("a", href=True)
+            ml_link = None
+            for a in links:
+                href = a['href']
+                if "mercadolivre.com.br" in href or "mercadolivre.com" in href:
+                    ml_link = href
+                    break
                     
-                    if titulo_elem and preco_elem and link_elem:
-                        titulo = titulo_elem.get_text(strip=True)
-                        preco_texto = preco_elem.get_text(strip=True).replace(".", "")
-                        link = link_elem.get("href", "")
-                        
-                        img_elem = card.select_one("img")
-                        img = ""
-                        if img_elem:
-                            img = img_elem.get("data-src") or img_elem.get("src") or ""
-                            
-                        link_com_afiliado = adicionar_id_afiliado(link)
-                        
-                        ofertas.append({
-                            "plataforma": "Mercado Livre",
-                            "titulo": titulo,
-                            "preco": float(preco_texto),
-                            "link": link_com_afiliado,
-                            "imagem": img
-                        })
-                except Exception:
-                    continue
-        else:
-            print("Bloqueado mesmo com curl_cffi.")
-            
+            if ml_link:
+                # Tenta achar o preço no texto
+                preco = 0.0
+                match_preco = re.search(r'R\$\s*([\d\.]+,\d{2})', texto)
+                if match_preco:
+                    preco_str = match_preco.group(1).replace('.', '').replace(',', '.')
+                    try:
+                        preco = float(preco_str)
+                    except:
+                        pass
+                
+                # Pega as primeiras 3 linhas do texto para ser o "título"
+                titulo = " ".join(texto.split('\n')[:3])
+                if len(titulo) > 80: 
+                    titulo = titulo[:77] + "..."
+                    
+                link_com_afiliado = adicionar_id_afiliado(ml_link)
+                
+                # Tenta pegar a imagem se houver
+                img_elem = msg.select_one(".tgme_widget_message_photo_wrap")
+                img_url = ""
+                if img_elem:
+                    style = img_elem.get("style", "")
+                    match_img = re.search(r'url\([\'"]?(.*?)[\'"]?\)', style)
+                    if match_img:
+                        img_url = match_img.group(1)
+
+                ofertas.append({
+                    "plataforma": "Mercado Livre (Telegram)",
+                    "titulo": titulo,
+                    "preco": preco,
+                    "link": link_com_afiliado,
+                    "imagem": img_url
+                })
+                
+                # Se acharmos 10 ofertas, já é o suficiente
+                if len(ofertas) >= 10:
+                    break
+                    
     except Exception as e:
-        print(f"Erro na requisição: {e}")
+        print(f"Erro ao acessar o Telegram: {e}")
         
     return ofertas
 
@@ -83,13 +104,15 @@ def enviar_whatsapp(ofertas):
         return
     
     if not ofertas:
-        mensagem = "⚠️ O Mercado Livre bloqueou o acesso hoje. (Status diferente de 200)."
+        mensagem = "⚠️ Não encontramos ofertas do Mercado Livre no canal hoje."
     else:
-        top_ofertas = sorted(ofertas, key=lambda x: x["preco"])[:5]
+        # Pega as 5 mais recentes
+        top_ofertas = ofertas[:5]
         mensagem = "🛒 *Melhores Ofertas do Mercado Livre*\n\n"
         for of in top_ofertas:
-            mensagem += f"*{of['titulo'][:50]}...*\n"
-            mensagem += f"💰 R$ {of['preco']:.2f}\n"
+            mensagem += f"*{of['titulo']}*\n"
+            if of['preco'] > 0:
+                mensagem += f"💰 R$ {of['preco']:.2f}\n"
             mensagem += f"🔗 {of['link']}\n\n"
     
     url = f"https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}"
@@ -100,17 +123,19 @@ def enviar_whatsapp(ofertas):
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
             print("WhatsApp enviado!")
+        else:
+            print(f"Erro na Green-API: {r.text}")
     except Exception as e:
         print(f"Erro WhatsApp: {e}")
 
 if __name__ == "__main__":
-    print("Iniciando coleta...")
-    todas_ofertas = buscar_mercadolivre()
+    print("Iniciando coleta via Telegram...")
+    todas_ofertas = buscar_ofertas_telegram()
     
     if not todas_ofertas:
         todas_ofertas = [{
             "plataforma": "Aviso",
-            "titulo": "O Mercado Livre bloqueou o acesso hoje.",
+            "titulo": "Nenhuma oferta encontrada no Telegram hoje.",
             "preco": 0.0,
             "link": "#",
             "imagem": ""
